@@ -17,8 +17,7 @@ class HttpReporter
         $this->client = new Client([
             'timeout' => $this->config['timeout'] ?? 2.0,
             'headers' => [
-                'X-App-Key' => $this->config['app_key'],
-                'Accept'    => 'application/json',
+                'Accept' => 'application/json',
             ],
         ]);
     }
@@ -26,63 +25,90 @@ class HttpReporter
     public function report(Throwable $exception, array $customContext = [])
     {
         $payload = [
-            'app_key'     => $this->config['app_key'],
-            'environment' => $this->config['environment'],
-            'type'        => 'exception',
-            'level'       => 'error',
-            'message'     => $exception->getMessage(),
-            'exception'   => [
-                'class' => get_class($exception),
-                'code'  => (string) $exception->getCode(),
-                'file'  => $exception->getFile(),
-                'line'  => $exception->getLine(),
-                'trace' => $exception->getTraceAsString(),
-            ],
-            'request'     => ContextResolver::resolveRequest(),
-            'server'      => ContextResolver::resolveServer(),
-            'user'        => ContextResolver::resolveUser(),
-            'occurred_at' => now()->toRfc3339String(),
+            'site_id'        => $this->config['site_id'],
+            'webhook_secret' => $this->config['webhook_secret'],
+            'title'          => "[Exception] " . get_class($exception),
+            'description'    => $exception->getMessage(),
+            'error_message'  => $exception->getTraceAsString(),
+            'status_code'    => 500, // Default for exceptions
+            'environment'    => $this->config['environment'],
+            'request'        => ContextResolver::resolveRequest(),
+            'server'         => ContextResolver::resolveServer(),
+            'user'           => ContextResolver::resolveUser(),
         ];
 
-        // Merge custom context if any
-        if (!empty($customContext)) {
-            $payload['custom'] = $customContext;
+        // Map priority if possible, or let the backend decide
+        if (isset($customContext['priority'])) {
+            $payload['priority'] = $customContext['priority'];
         }
 
-        return $this->send($payload);
+        if (isset($customContext['affected_user'])) {
+            $payload['affected_user'] = $customContext['affected_user'];
+        }
+
+        return $this->send($this->config['endpoint'], $payload);
     }
 
     public function capture(string $message, array $context = [], string $level = 'info')
     {
         $payload = [
-            'app_key'     => $this->config['app_key'],
-            'environment' => $this->config['environment'],
-            'type'        => 'custom',
-            'level'       => $level,
-            'message'     => $message,
-            'request'     => ContextResolver::resolveRequest(),
-            'server'      => ContextResolver::resolveServer(),
-            'user'        => ContextResolver::resolveUser(),
-            'occurred_at' => now()->toRfc3339String(),
-            'custom'      => $context,
+            'site_id'        => $this->config['site_id'],
+            'webhook_secret' => $this->config['webhook_secret'],
+            'title'          => $message,
+            'description'    => $context['description'] ?? $message,
+            'priority'       => $context['priority'] ?? $this->mapLevelToPriority($level),
+            'environment'    => $this->config['environment'],
+            'request'        => ContextResolver::resolveRequest(),
+            'server'         => ContextResolver::resolveServer(),
+            'user'           => ContextResolver::resolveUser(),
         ];
 
-        return $this->send($payload);
+        return $this->send($this->config['endpoint'], $payload);
     }
 
-    protected function send(array $payload)
+    public function reportRecovery(string $message = 'Service restored', int $responseTime = null)
     {
-        if (empty($this->config['app_key'])) {
+        $payload = [
+            'site_id'        => $this->config['site_id'],
+            'webhook_secret' => $this->config['webhook_secret'],
+            'message'        => $message,
+        ];
+
+        if ($responseTime !== null) {
+            $payload['response_time'] = $responseTime;
+        }
+
+        return $this->send($this->config['recovery_endpoint'], $payload);
+    }
+
+    protected function mapLevelToPriority(string $level): string
+    {
+        return match ($level) {
+            'emergency', 'alert', 'critical' => 'critical',
+            'error' => 'high',
+            'warning' => 'medium',
+            default => 'low',
+        };
+    }
+
+    protected function send(string $endpoint, array $payload)
+    {
+        if (empty($this->config['site_id']) || empty($this->config['webhook_secret'])) {
             return null;
         }
 
         try {
-            return $this->client->post($this->config['endpoint'], [
+            $response = $this->client->post($endpoint, [
                 'json' => $payload,
-                'synchronous' => !$this->config['async'],
+                'synchronous' => !($this->config['async'] ?? true),
             ]);
+            \Illuminate\Support\Facades\Log::info("Codprez Issue Tracker Report Success", ['status' => $response->getStatusCode()]);
+            return $response;
         } catch (\Exception $e) {
-            // Silently fail to not break the application
+            \Illuminate\Support\Facades\Log::error("Codprez Issue Tracker Report Failed", [
+                'error'    => $e->getMessage(),
+                'endpoint' => $endpoint
+            ]);
             return null;
         }
     }

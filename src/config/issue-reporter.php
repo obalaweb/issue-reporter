@@ -2,14 +2,24 @@
 
 return [
     /**
-     * The application key from Codprez Cloud tracker.
+     * The Site ID from Codprez Cloud tracker.
      */
-    'app_key' => env('CODPREZ_APP_KEY'),
+    'site_id' => env('CODPREZ_SITE_ID'),
+
+    /**
+     * The Webhook Secret for the site.
+     */
+    'webhook_secret' => env('CODPREZ_WEBHOOK_SECRET'),
 
     /**
      * The ingestion endpoint.
      */
-    'endpoint' => env('CODPREZ_ENDPOINT', 'https://cloud.codprez.com/api/events'),
+    'endpoint' => env('CODPREZ_ENDPOINT', 'https://codprez.cloud/api/webhook/issue'),
+
+    /**
+     * The recovery endpoint.
+     */
+    'recovery_endpoint' => env('CODPREZ_RECOVERY_ENDPOINT', 'https://codprez.cloud/api/webhook/recovery'),
 
     /**
      * The environment name.

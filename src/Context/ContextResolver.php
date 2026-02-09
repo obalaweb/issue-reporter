@@ -28,12 +28,12 @@ class ContextResolver
         ];
     }
 
-    public static function resolveUser(): array
+    public static function resolveUser(): ?array
     {
         $user = Auth::user();
 
         if (!$user) {
-            return [];
+            return null;
         }
 
         return [
