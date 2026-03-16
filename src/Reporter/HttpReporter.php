@@ -24,18 +24,39 @@ class HttpReporter
 
     public function report(Throwable $exception, array $customContext = [])
     {
+        $primaryFrame = $this->getPrimaryFrame($exception);
+        
         $payload = [
             'site_id'        => $this->config['site_id'],
             'webhook_secret' => $this->config['webhook_secret'],
             'title'          => "[Exception] " . get_class($exception),
             'description'    => $exception->getMessage(),
-            'error_message'  => $exception->getTraceAsString(),
-            'status_code'    => 500, // Default for exceptions
+            'error_message'  => $exception->getMessage(),
+            'status_code'    => 500,
             'environment'    => $this->config['environment'],
-            'request'        => ContextResolver::resolveRequest(),
-            'server'         => ContextResolver::resolveServer(),
-            'user'           => ContextResolver::resolveUser(),
+            
+            // Rich tracking fields
+            'exception_class' => get_class($exception),
+            'file'           => $exception->getFile(),
+            'line'           => $exception->getLine(),
+            'stack_trace'    => $exception->getTraceAsString(),
+            'type'           => 'exception',
+            
+            'request_data'   => ContextResolver::resolveRequest(),
+            'server_data'    => ContextResolver::resolveServer(),
+            'user_data'      => ContextResolver::resolveUser(),
         ];
+
+        if ($primaryFrame) {
+            $payload['description'] = sprintf(
+                "Error in %s:%d\n\n%s",
+                $primaryFrame['file'],
+                $primaryFrame['line'],
+                $exception->getMessage()
+            );
+            $payload['file'] = $primaryFrame['file'];
+            $payload['line'] = $primaryFrame['line'];
+        }
 
         // Map priority if possible, or let the backend decide
         if (isset($customContext['priority'])) {
@@ -44,6 +65,8 @@ class HttpReporter
 
         if (isset($customContext['affected_user'])) {
             $payload['affected_user'] = $customContext['affected_user'];
+        } elseif ($userData = ContextResolver::resolveUser()) {
+            $payload['affected_user'] = $userData['email'] ?? $userData['id'] ?? null;
         }
 
         return $this->send($this->config['endpoint'], $payload);
@@ -58,12 +81,42 @@ class HttpReporter
             'description'    => $context['description'] ?? $message,
             'priority'       => $context['priority'] ?? $this->mapLevelToPriority($level),
             'environment'    => $this->config['environment'],
-            'request'        => ContextResolver::resolveRequest(),
-            'server'         => ContextResolver::resolveServer(),
-            'user'           => ContextResolver::resolveUser(),
+            'request_data'   => ContextResolver::resolveRequest(),
+            'server_data'    => ContextResolver::resolveServer(),
+            'user_data'      => ContextResolver::resolveUser(),
+            'type'           => 'capture',
         ];
 
         return $this->send($this->config['endpoint'], $payload);
+    }
+
+    protected function getPrimaryFrame(Throwable $exception): ?array
+    {
+        $trace = $exception->getTrace();
+        
+        // Start with the exception's own location
+        $primaryFile = $exception->getFile();
+        $primaryLine = $exception->getLine();
+
+        // If the exception happened in vendor, try to find the first non-vendor frame
+        if (str_contains($primaryFile, '/vendor/')) {
+            foreach ($trace as $frame) {
+                if (isset($frame['file']) && !str_contains($frame['file'], '/vendor/')) {
+                    $primaryFile = $frame['file'];
+                    $primaryLine = $frame['line'] ?? 0;
+                    break;
+                }
+            }
+        }
+
+        // Clean up the path to be relative to base path if possible
+        $basePath = base_path();
+        $cleanFile = str_replace($basePath . '/', '', $primaryFile);
+
+        return [
+            'file' => $cleanFile,
+            'line' => $primaryLine,
+        ];
     }
 
     public function reportRecovery(string $message = 'Service restored', int $responseTime = null)
